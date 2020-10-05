@@ -9,7 +9,9 @@
          bip32/ripemd160
          binaryio
          sha
-         asn1)
+         asn1
+         (except-in crypto bytes->hex-string)
+         crypto/libcrypto)
 
 (provide (all-defined-out))
 
@@ -148,3 +150,17 @@
 (define derive-child-pkscript (make-with-child-key derive-p2sh-pkscript))
 
 (define derive-child-redeemscript (make-with-child-key derive-p2sh-redeemscript))
+
+(define (sign-input signing-xkey sighash)
+  (parameterize
+     ([crypto-factories (list libcrypto-factory)])
+    (define params (generate-pk-parameters 'ec '((curve "secp256k1"))))
+    (define curve-oid (third (pk-parameters->datum params 'rkt-params)))
+    (define pubkey (point->sec
+                     (jacobian->affine (xpub-point (N signing-xkey)))
+                     #:compressed? #f))
+    (define key
+      (datum->pk-key
+        `(ec private ,curve-oid ,pubkey ,(xpriv-exponent signing-xkey))
+        'rkt-private))
+    (der->rs (pk-sign key sighash))))
