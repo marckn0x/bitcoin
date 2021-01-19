@@ -6,10 +6,18 @@
 (define name=>op (make-hasheq))
 
 (define (op->name op)
-  (hash-ref op=>name op))
+  (hash-ref
+    op=>name op
+    (thunk (string->symbol (format "OP_UNKNOWN_~a" op)))))
 
 (define (name->op name)
-  (hash-ref name=>op name))
+  (hash-ref
+    name=>op name
+    (thunk
+      (match (symbol->string name)
+        [(regexp #rx"^OP_UNKNOWN_([0-9]*)$" (list _ (app string->number v)))
+         v]
+        [x (error 'name->op "Cannot convert name to op: ~a" x)]))))
 
 (define-syntax-rule (def-op name code)
   (begin
@@ -132,3 +140,7 @@
 (def-op OP_NOP8 #xb7)
 (def-op OP_NOP9 #xb8)
 (def-op OP_NOP10 #xb9)
+(def-op OP_SMALLINTEGER #xfa)
+(def-op OP_PUBKEYS #xfb)
+(def-op OP_PUBKEYHASH #xfd)
+(def-op OP_PUBKEY #xfe)

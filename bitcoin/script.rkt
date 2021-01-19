@@ -40,6 +40,11 @@
 
 (define (read-script)
   (define b (read-byte))
+  (define (read-n b L)
+    (define len (read-int L))
+    (when (> len (expt 1024 3))
+      (error 'read-script "OP_PUSHDATA4 tried to push more than 1MB - something is wrong"))
+    (op (op->name b) (read-bytes len)))
   (if (eof-object? b)
       empty
       (cons
@@ -47,11 +52,11 @@
          [(< b OP_PUSHDATA1)
           (op b (read-bytes b))]
          [(= b OP_PUSHDATA1)
-          (op (op->name b) (read-bytes (read-int 1)))]
+          (read-n b 1)]
          [(= b OP_PUSHDATA2)
-          (op (op->name b) (read-bytes (read-int 2)))]
+          (read-n b 2)]
          [(= b OP_PUSHDATA4)
-          (op (op->name b) (read-bytes (read-int 4)))]
+          (read-n b 4)]
          [else (op (op->name b) #f)])
        (read-script))))
 

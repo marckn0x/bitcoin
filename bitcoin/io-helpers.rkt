@@ -41,6 +41,8 @@
 
 (define (read-lenprebytes)
   (define length (read-varint))
+  (when (> length (expt 1024 3))
+    (error 'read-lenprebytes "tried to read variable-length byte string longer than 1MB - something is wrong"))
   (read-bytes length))
 
 (define/contract (write-lenprebytes bytes)
@@ -52,13 +54,15 @@
 (define/contract (read-lenprearray reader)
   (-> (-> any/c) list?)
   (define length (read-varint))
+  (when (> length (expt 1024 3))
+    (error 'read-lenprearray "tried to read variable-length array with more than 1024^3 elements - something is wrong"))
   (for/list ([i length])
     (reader)))
 
 (define (write-lenprearray writer array)
-  (-> (-> any/c any/c) list?)
+  (-> (-> any/c any/c) void)
   (write-varint (length array))
-  (for/list ([elem array])
+  (for ([elem array])
     (writer elem)))
 
 (define-syntax-rule (capture-output body ...)
