@@ -24,7 +24,15 @@
     (read-int 4)
     (read-int 4)
     (read-int 4)
-    (read-lenprearray read-transaction)))
+    (let ([num-txns (read-varint)])
+      (when (> num-txns (expt 1024 3))
+        (error 'read-block "block contains too many transactions"))
+      (if (= num-txns 0)
+          empty
+          (cons
+            (read-transaction #:coinbase #t)
+            (for/list ([i (sub1 num-txns)])
+              (read-transaction)))))))
 
 (define (write-block the-block)
   (match-define (block v ph mr ts dt n txs) the-block)

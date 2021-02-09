@@ -12,6 +12,8 @@
 
 (provide (all-defined-out))
 
+(define parse-scripts (make-parameter #t))
+
 (struct outpoint (tx-hash index) #:transparent #:mutable)
 (struct txin (outpoint script sequence) #:transparent #:mutable)
 (struct txout (value pkscript) #:transparent #:mutable)
@@ -25,29 +27,39 @@
   (write-bytes (outpoint-tx-hash out))
   (write-int 4 (outpoint-index out)))
 
-(define (read-in)
+(define (read-in #:coinbase [coinbase #f])
   (txin
    (read-outpoint)
-   (with-input-from-bytes (read-lenprebytes) read-script)
+   (let ([scriptsig (read-lenprebytes)])
+     (if (or coinbase (not (parse-scripts)))
+         scriptsig
+         (with-input-from-bytes scriptsig read-script)))
    (read-int 4)))
 
 (define (write-in in)
   (write-outpoint (txin-outpoint in))
   (write-lenprebytes
-   (with-output-to-bytes
-     (thunk (write-script (txin-script in)))))
+   (if (bytes? (txin-script in))
+       (txin-script in)
+       (with-output-to-bytes
+         (thunk (write-script (txin-script in))))))
   (write-int 4 (txin-sequence in)))
 
 (define (read-out)
   (txout
    (read-int 8)
-   (with-input-from-bytes (read-lenprebytes) read-script)))
+   (let ([scriptpubkey (read-lenprebytes)])
+     (if (parse-scripts)
+         (with-input-from-bytes scriptpubkey read-script)
+         scriptpubkey))))
 
 (define (write-out out)
   (write-int 8 (txout-value out))
   (write-lenprebytes
-   (with-output-to-bytes
-     (thunk (write-script (txout-pkscript out))))))
+    (if (bytes? (txout-pkscript out))
+        (txout-pkscript out)
+        (with-output-to-bytes
+          (thunk (write-script (txout-pkscript out)))))))
 
 (define (read-witnesses len)
   (for/list ([i len])
@@ -57,7 +69,7 @@
   (for ([ws wss])
     (write-lenprearray write-lenprebytes ws)))
 
-(define (read-transaction)
+(define (read-transaction #:coinbase [coinbase #f])
   (define version (read-int 4))
   (define num-ins-or-flag (read-varint))
   (define num-ins
@@ -69,7 +81,7 @@
         num-ins-or-flag))
   (tx+v
    (for/list ([i num-ins])
-     (read-in))
+     (read-in #:coinbase (and coinbase (= i 0))))
    (read-lenprearray read-out)
    (if (= 0 num-ins-or-flag)
        (read-witnesses num-ins)
