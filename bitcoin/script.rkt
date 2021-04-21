@@ -18,6 +18,8 @@
 (struct op (code data) #:transparent #:mutable)
 (struct scriptsig (der-signature pubkey) #:transparent #:mutable)
 
+(define script? (listof op?))
+
 (define (der->rs bs)
   (match-define
     (hash-table ('r r) ('s s))
@@ -93,19 +95,25 @@
   (define s (bytes->integer (read-bytes (read-byte)) #t #t))
   (list r s))
 
-(define (encode-scriptsig the-scriptsig)
-  (match-define (scriptsig signature compressed-pubkey) the-scriptsig)
-  (define sig+1 (bytes-append signature #"\x01"))
-  (unless (<= 66 (bytes-length sig+1) 75) (error "signature wrong length"))
-  (unless (= (bytes-length compressed-pubkey) 33) (error "pubkey wrong length"))
-  (define redeem-script-bytes
-    (capture-output
-      (write-script (derive-p2sh-redeemscript compressed-pubkey))))
-  (list
-    (op 'OP_0 #"")
-    (op (bytes-length sig+1) sig+1)
-    (op (bytes-length redeem-script-bytes) redeem-script-bytes)))
+(define/contract (encode-scriptsigs redeemscript the-scriptsigs)
+  (-> script? (listof scriptsig?) script?)
+  (for ([s the-scriptsigs])
+    (match-define (scriptsig sig comp-pkey) s)
+    (unless (compressed-pubkey? comp-pkey)
+      (error 'encode-scriptsigs "expected compressed-pubkey? but got ~a" comp-pkey))
+    (unless (and (bytes? sig)
+                 (<= 65 (bytes-length sig) 74))
+      (error 'encode-scriptsigs "expected signature to be a DER byte string of length between 65 and 74 bytes but got ~a" sig)))
+  (define sorted-scriptsigs
+    (sort the-scriptsigs (lambda (x y) (bytes<? (scriptsig-pubkey x) (scriptsig-pubkey y)))))
+  (define redeemscript-bytes (capture-output (write-script redeemscript)))
+  `(,(op 'OP_0 #"")
+    ,@(for/list ([s sorted-scriptsigs])
+        (define sig+1 (bytes-append (scriptsig-der-signature s) #"\x01"))
+        (op (bytes-length sig+1) sig+1))
+    ,(op (bytes-length redeemscript-bytes redeemscript-bytes))))
 
+; p2pkh
 (define (decode-scriptsig script)
   (match-define (list (op _ signature) (op _ pubkey)) script)
   (scriptsig (subbytes signature 0 (sub1 (bytes-length signature))) pubkey))
@@ -136,25 +144,65 @@
        [(or 5 196) (make-pkscript-p2sh payload)]
        [_ (error "bad version byte in base58 address")])]))
 
-(define (derive-p2sh-redeemscript compressed-pubkey)
-  (unless (equal? (bytes-length compressed-pubkey) 33)
-    (error "expected compressed-pubkey to have length 33 bytes"))
-  (list (op 'OP_1 #f) (op 33 compressed-pubkey) (op 'OP_1 #f) (op 'OP_CHECKMULTISIG #f)))
+(define (compressed-pubkey? b)
+  (and (bytes? b)
+       (= (bytes-length b) 33)
+       (member (bytes-ref b 0) '(2 3))
+       #t))
 
-(define (derive-p2sh-pkscript compressed-pubkey)
+(define/contract (derive-p2sh-redeemscript-multisig multisig-m compressed-pubkeys)
+  (-> exact-nonnegative-integer? (listof compressed-pubkey?) script?)
+  (unless (>= multisig-m 1)
+    (error "expected multisig-m >= 1"))
+  (unless (<= multisig-m (length compressed-pubkeys))
+    (error "expected multisig-m <= number of pubkeys"))
+  (unless (<= (length compressed-pubkeys) 16)
+    (error "expected at most 16 pubkeys"))
+  (unless (= (set-count (list->set compressed-pubkeys))
+             (length compressed-pubkeys))
+    (error "duplicate pubkeys"))
+  (define sorted-pubkeys (sort compressed-pubkeys bytes<?))
+  (define op-zero #x50)
+  `(
+     ,(op (+ multisig-m op-zero) #f)
+     ,@(for/list ([pubkey sorted-pubkeys])
+         (op 33 pubkey))
+     ,(op (+ (length sorted-pubkeys) op-zero) #f)
+     ,(op 'OP_CHECKMULTISIG #f)
+   ))
+
+(define/contract (p2sh-redeemscript->pkscript redeemscript)
+  (-> script? script?)
   (define inner-hash
     (ripemd160
      (sha256
-      (capture-output (write-script (derive-p2sh-redeemscript compressed-pubkey))))))
+      (capture-output (write-script redeemscript)))))
   (list (op 'OP_HASH160 #f) (op 20 inner-hash) (op 'OP_EQUAL #f)))
 
-(define ((make-with-child-key proc) root-xpub path)
-  (proc
-   (point->sec (jacobian->affine (xpub-point (xpub-derive-path root-xpub path))))))
+(define (derive-child-redeemscript-multisig multisig-m root-xpubs path)
+  (derive-p2sh-redeemscript-multisig
+    multisig-m
+    (for/list ([root-xpub root-xpubs])
+      (point->sec (jacobian->affine (xpub-point (xpub-derive-path root-xpub path)))))))
 
-(define derive-child-pkscript (make-with-child-key derive-p2sh-pkscript))
+;; Backwards compatibility
+(define (derive-child-redeemscript root-xpub path)
+  (derive-child-redeemscript-multisig 1 (list root-xpub) path))
 
-(define derive-child-redeemscript (make-with-child-key derive-p2sh-redeemscript))
+(define (derive-child-pkscript root-xpub path)
+  (p2sh-redeemscript->pkscript (derive-child-redeemscript root-xpub path)))
+
+(define (derive-p2sh-redeemscript compressed-pubkey)
+  (derive-p2sh-redeemscript-multisig 1 (list compressed-pubkey)))
+
+(define (derive-p2sh-pkscript compressed-pubkey)
+  (p2sh-redeemscript->pkscript (derive-p2sh-redeemscript compressed-pubkey)))
+
+(define (encode-scriptsig the-scriptsig)
+  (encode-scriptsigs
+    (derive-p2sh-redeemscript (scriptsig-pubkey the-scriptsig))
+    (list the-scriptsig)))
+;;;;;;;;;;;;;;;;;;;
 
 (define (sign-input signing-xkey sighash)
   (parameterize

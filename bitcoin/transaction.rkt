@@ -120,3 +120,9 @@
        (write-transaction rewritten))))
   (define preimage (bytes-append serialized (integer->bytes 1 4 #f #f)))
   (sha:sha256 (sha:sha256 preimage)))
+
+(define (txid tx)
+  (list->bytes
+    (reverse
+      (bytes->list
+        (sha:sha256 (sha:sha256 (capture-output (write-transaction tx))))))))
