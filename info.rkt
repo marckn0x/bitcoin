@@ -1,5 +1,5 @@
 #lang setup/infotab
-(define version "0.0.6")
+(define version "0.0.7")
 (define collection 'multi)
 (define deps '("base"
                "binaryio"

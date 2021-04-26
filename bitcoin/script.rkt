@@ -13,7 +13,31 @@
          (except-in crypto bytes->hex-string)
          crypto/libcrypto)
 
-(provide (all-defined-out))
+(provide (struct-out op)
+         (struct-out scriptsig)
+         script?
+         der->rs
+         rs->low-s-der
+         push-op
+         read-script
+         write-script
+         remove-codeseparator
+         read-der-sig
+         encode-scriptsigs
+         decode-scriptsig
+         make-pkscript-p2pkh
+         make-pkscript-p2sh
+         make-pkscript-bech32
+         address-to-pkscript
+         derive-p2sh-redeemscript-multisig
+         p2sh-redeemscript->pkscript
+         derive-child-redeemscript-multisig
+         derive-child-redeemscript
+         derive-child-pkscript
+         derive-p2sh-redeemscript
+         derive-p2sh-pkscript
+         encode-scriptsig
+         sign-input)
 
 (struct op (code data) #:transparent #:mutable)
 (struct scriptsig (der-signature pubkey) #:transparent #:mutable)
@@ -28,10 +52,10 @@
     (integer->bytes r 32 #f #t)
     (integer->bytes s 32 #f #t)))
 
-(define (rs->low-s-der bs)
+(define (rs->low-s-der bs [curve secp256k1])
   (define r (bytes->integer (subbytes bs 0 32) #f #t))
   (define s (bytes->integer (subbytes bs 32) #f #t))
-  (define order (curve-n secp256k1))
+  (define order (curve-n curve))
   (define low-s
     (if (> s (quotient order 2))
         (- order s)
@@ -39,6 +63,19 @@
   (asn1->bytes/DER
     (SEQUENCE [r INTEGER] [s INTEGER])
     (hash 'r r 's low-s)))
+
+(define/contract (push-op data)
+  (-> bytes? op?)
+  (define len (bytes-length data))
+  (cond
+    [(< len OP_PUSHDATA1)
+     (op len data)]
+    [(< len 256)
+     (op OP_PUSHDATA1 data)]
+    [(< len 65536)
+     (op OP_PUSHDATA2 data)]
+    [else
+     (op OP_PUSHDATA4 data)]))
 
 (define (read-script)
   (define b (read-byte))
@@ -107,11 +144,11 @@
   (define sorted-scriptsigs
     (sort the-scriptsigs (lambda (x y) (bytes<? (scriptsig-pubkey x) (scriptsig-pubkey y)))))
   (define redeemscript-bytes (capture-output (write-script redeemscript)))
-  `(,(op 'OP_0 #"")
+  `(,(push-op #"")
     ,@(for/list ([s sorted-scriptsigs])
         (define sig+1 (bytes-append (scriptsig-der-signature s) #"\x01"))
-        (op (bytes-length sig+1) sig+1))
-    ,(op (bytes-length redeemscript-bytes redeemscript-bytes))))
+        (push-op sig+1))
+    ,(push-op redeemscript-bytes)))
 
 ; p2pkh
 (define (decode-scriptsig script)
@@ -119,16 +156,20 @@
   (scriptsig (subbytes signature 0 (sub1 (bytes-length signature))) pubkey))
 
 (define (make-pkscript-p2pkh payload)
-  (list (op 'OP_DUP #f) (op 'OP_HASH160 #f) (op 20 payload) (op 'OP_EQUALVERIFY #f) (op 'OP_CHECKSIG #f)))
+  (unless (= (bytes-length payload) 20)
+    (error "Invalid p2pkh payload length"))
+  (list (op 'OP_DUP #f) (op 'OP_HASH160 #f) (push-op payload) (op 'OP_EQUALVERIFY #f) (op 'OP_CHECKSIG #f)))
 
 (define (make-pkscript-p2sh payload)
-  (list (op 'OP_HASH160 #f) (op 20 payload) (op 'OP_EQUAL #f)))
+  (unless (= (bytes-length payload) 20)
+    (error "Invalid p2sh payload length"))
+  (list (op 'OP_HASH160 #f) (push-op payload) (op 'OP_EQUAL #f)))
 
 (define (make-pkscript-bech32 payload)
   (match (bytes-length payload)
     [(or 20 32) (void)]
     [_ (error "Invalid bech32 payload length")])
-  (list (op 'OP_0 #"") (op (bytes-length payload) payload)))
+  (list (push-op #"") (push-op payload)))
 
 (define (address-to-pkscript addr)
   (match (string-downcase (substring addr 0 2))
@@ -166,7 +207,7 @@
   `(
      ,(op (+ multisig-m op-zero) #f)
      ,@(for/list ([pubkey sorted-pubkeys])
-         (op 33 pubkey))
+         (push-op pubkey))
      ,(op (+ (length sorted-pubkeys) op-zero) #f)
      ,(op 'OP_CHECKMULTISIG #f)
    ))
@@ -177,7 +218,7 @@
     (ripemd160
      (sha256
       (capture-output (write-script redeemscript)))))
-  (list (op 'OP_HASH160 #f) (op 20 inner-hash) (op 'OP_EQUAL #f)))
+  (list (op 'OP_HASH160 #f) (push-op inner-hash) (op 'OP_EQUAL #f)))
 
 (define (derive-child-redeemscript-multisig multisig-m root-xpubs path)
   (derive-p2sh-redeemscript-multisig
