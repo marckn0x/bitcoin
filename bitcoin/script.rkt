@@ -29,6 +29,7 @@
          make-pkscript-p2sh
          make-pkscript-bech32
          address-to-pkscript
+         op-zero
          derive-p2sh-redeemscript-multisig
          p2sh-redeemscript->pkscript
          derive-child-redeemscript-multisig
@@ -191,6 +192,8 @@
        (member (bytes-ref b 0) '(2 3))
        #t))
 
+(define op-zero #x50)
+
 (define/contract (derive-p2sh-redeemscript-multisig multisig-m compressed-pubkeys)
   (-> exact-nonnegative-integer? (listof compressed-pubkey?) script?)
   (unless (>= multisig-m 1)
@@ -203,7 +206,6 @@
              (length compressed-pubkeys))
     (error "duplicate pubkeys"))
   (define sorted-pubkeys (sort compressed-pubkeys bytes<?))
-  (define op-zero #x50)
   `(
      ,(op (+ multisig-m op-zero) #f)
      ,@(for/list ([pubkey sorted-pubkeys])
